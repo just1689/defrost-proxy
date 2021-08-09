@@ -4,30 +4,38 @@ import (
 	"fmt"
 	"github.com/just1689/scale-aware-proxy-operator/k8s"
 	"github.com/just1689/scale-aware-proxy-operator/model"
+	"github.com/just1689/scale-aware-proxy-operator/util"
 	"github.com/sirupsen/logrus"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
 var (
-	EnvLocalAddr  = "LOCAL_ADDR"
-	EnvRemoteAddr = "REMOTE_ADDR"
-	scaler        = k8s.NewScaler()
-	localAddr     = addressAsTCPAddr(EnvLocalAddr)
-	remoteAddr    = addressAsTCPAddr(EnvRemoteAddr)
+	EnvListenAddr  = "LISTEN_ADDR"
+	EnvRemoteAddr  = "REMOTE_ADDR"
+	EnvListenPool  = "LISTEN_POOL"
+	scaler         = k8s.NewScaler()
+	localAddr      = addressAsTCPAddr(EnvListenAddr)
+	remoteAddr     = addressAsTCPAddr(EnvRemoteAddr)
+	connectionPool = util.GetEnvIntOr(EnvListenPool, 20)
 )
 
 func StartServer() {
+	logrus.Infoln("StartServer()")
+
+	logrus.Infoln("net.ListenTCP()")
 	listener, err := net.ListenTCP("tcp", localAddr)
 	if err != nil {
 		logrus.Panicln("Failed to open local port to listen: %s", err)
 	}
-	for i := 1; i <= 9; i++ {
+	logrus.Infoln("for connectionPool()")
+	for i := 1; i <= connectionPool-1; i++ {
 		logrus.Infoln("starting worker", i)
 		go handleIncomingConnections(listener)
 	}
-	logrus.Infoln("starting worker", 10)
+	logrus.Infoln("starting worker", connectionPool)
 	handleIncomingConnections(listener)
 
 }
@@ -35,17 +43,20 @@ func StartServer() {
 func handleIncomingConnections(listener *net.TCPListener) {
 	for {
 		conn, err := listener.AcceptTCP()
-		if err != nil {
-			logrus.Errorln("Failed to accept TCP conn on local port: %s", err)
-			continue
-		}
-
-		if !model.ScaledUp.Get() {
-			logrus.Infoln("new connection < scaler getTarget()")
-			scaler <- model.ThisTarget
-		}
-		go handleIncomingConnection(conn)
+		considerIncomingConnection(conn, err)
 	}
+}
+func considerIncomingConnection(conn *net.TCPConn, err error) {
+	if err != nil {
+		logrus.Errorln("Failed to accept TCP conn on local port: %s", err)
+		return
+	}
+
+	if !model.ScaledUp.Get() {
+		logrus.Infoln("new connection < scaler getTarget()")
+		scaler.Next()
+	}
+	go handleIncomingConnection(conn)
 }
 
 func handleIncomingConnection(conn *net.TCPConn) {
@@ -59,12 +70,15 @@ func handleIncomingConnection(conn *net.TCPConn) {
 		remoteConn, err := net.DialTimeout("tcp", remoteAddr.String(), 1*time.Second)
 		if err != nil {
 			tries++
+			if time.Since(start) > time.Duration(1*time.Second) && !requestedBoot {
+				requestedBoot = true
+				scaler.Next()
+			}
+			if strings.Contains(err.Error(), "timeout") {
+				continue
+			}
 			logrus.Errorln(err)
 			logrus.Errorln("tries:", tries)
-			if time.Since(start) > time.Duration(1) && !requestedBoot {
-				requestedBoot = true
-				scaler <- model.ThisTarget
-			}
 			continue
 		}
 		k8s.Freezer.Ping()

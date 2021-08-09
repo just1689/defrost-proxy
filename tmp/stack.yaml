@@ -1,20 +1,15 @@
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: coldfaas
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: coldfaas-svc-acc
-  namespace: "coldfaas"
+  name: defrost-proxy-svc-acc
+  namespace: default
 automountServiceAccountToken: true
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: coldfaas-clusterrole-binding
-  namespace: "coldfaas"
+  name: defrost-proxy-clusterrole-binding
+  namespace: default
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -22,14 +17,14 @@ roleRef:
 subjects:
   - apiGroup: ""
     kind: ServiceAccount
-    name: coldfaas-svc-acc
-    namespace: "coldfaas"
+    name: defrost-proxy-svc-acc
+    namespace: default
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: nginx-backend
-  namespace: coldfaas
+  name: nginx
+  namespace: default
 spec:
   type: ClusterIP
   ports:
@@ -43,7 +38,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  namespace: coldfaas
+  namespace: default
   name: nginx
   labels:
     app.kubernetes.io/name: nginx
@@ -61,10 +56,10 @@ spec:
         app.kubernetes.io/name: nginx
         app.kubernetes.io/instance: nginx
     spec:
-      serviceAccountName: coldfaas-svc-acc
       containers:
         - name: nginx
           image: reg.captainjustin.space/nginx:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 80
               name: http
@@ -81,8 +76,8 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: nginx
-  namespace: coldfaas
+  name: nginx-proxy
+  namespace: default
 spec:
   type: NodePort
   ports:
@@ -91,47 +86,47 @@ spec:
       name: http
       targetPort: http
   selector:
-    app.kubernetes.io/instance: coldfaas
-    app.kubernetes.io/name: coldfaas
+    app.kubernetes.io/instance: defrost-proxy
+    app.kubernetes.io/name: defrost-proxy
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  namespace: coldfaas
-  name: coldfaas
+  namespace: default
+  name: defrost-proxy
   labels:
-    app.kubernetes.io/name: coldfaas
-    app.kubernetes.io/instance: coldfaas
+    app.kubernetes.io/name: defrost-proxy
+    app.kubernetes.io/instance: defrost-proxy
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: coldfaas
-      app.kubernetes.io/instance: coldfaas
+      app.kubernetes.io/name: defrost-proxy
+      app.kubernetes.io/instance: defrost-proxy
   revisionHistoryLimit: 1
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: coldfaas
-        app.kubernetes.io/instance: coldfaas
+        app.kubernetes.io/name: defrost-proxy
+        app.kubernetes.io/instance: defrost-proxy
     spec:
-      serviceAccountName: coldfaas-svc-acc
+      serviceAccountName: defrost-proxy-svc-acc
       containers:
-        - name: openfaas
-          image: reg.captainjustin.space/coldfaas:dev
-          imagePullPolicy: Always
+        - name: defrost-proxy
+          image: reg.captainjustin.space/defrost-proxy:dev3
+          imagePullPolicy: Never
           ports:
             - containerPort: 8080
               name: http
               protocol: TCP
           env:
-            - name: "LOCAL_ADDR"
+            - name: "LISTEN_ADDR"
               value: "0.0.0.0:8080"
             - name: "REMOTE_ADDR"
-              value: "nginx-backend:8080"
+              value: "nginx:8080"
             - name: "TARGET_NAMESPACE"
-              value: "coldfaas"
+              value: "default"
             - name: "TARGET_NAME"
               value: "nginx"
